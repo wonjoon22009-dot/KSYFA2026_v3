@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>KSYFA Match Center — Tournament Live v12.3</title>
+<title>KSYFA Match Center — Tournament Live v12.5</title>
 <style>
 :root{
  --bg:#071019;--bg2:#0b1522;--card:#101c2a;--card2:#142334;--line:#24384c;
@@ -214,6 +214,21 @@ textarea{resize:vertical;min-height:90px}
 }
 .tiebreak-note{margin-top:10px;color:#7690a7;font-size:10px;line-height:1.55}
 
+
+.comment-panel{margin-top:16px;padding:14px;border:1px solid #29435b;background:#091520;border-radius:16px}
+.comment-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px}
+.comment-head h3{margin:0;font-size:14px}
+.comment-list{display:grid;gap:8px;max-height:360px;overflow:auto;padding-right:2px}
+.comment-item{padding:10px 11px;border:1px solid #263e55;background:#0d1b28;border-radius:11px}
+.comment-meta{display:flex;align-items:center;gap:6px;font-size:9px;color:#8da5ba;margin-bottom:5px}
+.comment-meta img{width:18px;height:18px;object-fit:contain}
+.comment-team{font-weight:950;color:#d4e5f3}
+.comment-body{font-size:12px;line-height:1.55;word-break:break-word}
+.comment-form{display:grid;grid-template-columns:150px 1fr auto;gap:8px;margin-top:10px}
+.comment-form select,.comment-form input{min-width:0}
+.comment-empty{padding:18px;text-align:center;color:#71899e;font-size:10px}
+.comment-admin-delete{margin-left:auto;border:0;background:transparent;color:#ff8fa2;font-size:9px;font-weight:900;cursor:pointer}
+@media(max-width:720px){.comment-form{grid-template-columns:1fr}.comment-form .btn{width:100%}}
 </style>
 </head>
 <body>
@@ -256,6 +271,18 @@ textarea{resize:vertical;min-height:90px}
     <div class="cheer"><button id="cheerA">💙 왼쪽 팀 응원</button><button id="cheerB">📣 오른쪽 팀 응원</button></div>
     <div class="cheer-summary"><b id="cheerATxt">0표 · 50%</b><span>응원 현황</span><b id="cheerBTxt" style="text-align:right">0표 · 50%</b></div>
     <div class="bar"><div id="cheerBarA" class="bar-a" style="width:50%"></div><div id="cheerBarB" class="bar-b" style="width:50%"></div></div><div id="heroShootout"></div>
+    <div class="comment-panel">
+      <div class="comment-head">
+        <h3>💬 실시간 응원 댓글</h3>
+        <span class="note">익명 · 경기별</span>
+      </div>
+      <div id="commentList" class="comment-list"><div class="comment-empty">댓글을 불러오는 중...</div></div>
+      <div class="comment-form">
+        <select id="commentTeam"></select>
+        <input id="commentInput" maxlength="120" placeholder="응원 댓글을 남겨주세요 (최대 120자)">
+        <button class="btn green" id="sendComment">등록</button>
+      </div>
+    </div>
    </div>
   </div>
   <div class="card">
@@ -406,7 +433,7 @@ textarea{resize:vertical;min-height:90px}
  </div>
 </div>
 
-<div class="footer">KSYFA · Korean Science Yeongjae Football Association · Tournament Live v12.3</div><div class="toast" id="toast"></div>
+<div class="footer">KSYFA · Korean Science Yeongjae Football Association · Tournament Live v12.5</div><div class="toast" id="toast"></div>
 
 
 <script src="config.js"></script>
@@ -592,13 +619,121 @@ function renderShootoutHero(m,d){
  }else box.innerHTML="";
 }
 
+
+let currentComments=[];
+let commentChannel=null;
+let lastCommentAt=0;
+
+function commentTime(iso){
+ try{return new Intl.DateTimeFormat("ko-KR",{hour:"2-digit",minute:"2-digit"}).format(new Date(iso))}
+ catch{return ""}
+}
+function safeText(s){
+ return String(s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
+}
+function updateCommentTeamOptions(){
+ const m=getMatch(state.selected),sel=document.getElementById("commentTeam");
+ if(!m||!sel)return;
+ const old=sel.value;
+ sel.innerHTML=`<option value="${m.a}">📣 ${tn(m.a).short} 응원</option><option value="${m.b}">📣 ${tn(m.b).short} 응원</option>`;
+ if([m.a,m.b].includes(old))sel.value=old;
+}
+function renderComments(){
+ const box=document.getElementById("commentList"),m=getMatch(state.selected);
+ if(!box||!m)return;
+ const rows=currentComments.filter(c=>c.match_id===m.id);
+ if(!rows.length){
+   box.innerHTML=`<div class="comment-empty">아직 댓글이 없습니다. 첫 응원을 남겨보세요!</div>`;
+   return;
+ }
+ box.innerHTML=rows.map(c=>{
+   const team=tn(c.team_id);
+   return `<div class="comment-item">
+     <div class="comment-meta">
+       <img src="${team.logo}">
+       <span class="comment-team">${team.short} 응원</span>
+       <span>· 익명</span>
+       <span>· ${commentTime(c.created_at)}</span>
+       ${adminAuthed?`<button class="comment-admin-delete" data-comment-id="${c.id}">삭제</button>`:""}
+     </div>
+     <div class="comment-body">${safeText(c.content)}</div>
+   </div>`;
+ }).join("");
+ box.scrollTop=box.scrollHeight;
+ if(adminAuthed){
+   box.querySelectorAll(".comment-admin-delete").forEach(btn=>{
+     btn.onclick=()=>deleteComment(btn.dataset.commentId);
+   });
+ }
+}
+async function loadCommentsForSelected(){
+ const box=document.getElementById("commentList");
+ if(!window.__KSYFA_REMOTE_READY__||!window.__KSYFA_SUPABASE__){
+   if(box)box.innerHTML=`<div class="comment-empty">실시간 서버 연결 후 댓글을 사용할 수 있습니다.</div>`;
+   return;
+ }
+ const m=getMatch(state.selected);
+ if(!m)return;
+ const {data,error}=await window.__KSYFA_SUPABASE__
+   .from("match_comments")
+   .select("id,match_id,team_id,content,created_at")
+   .eq("match_id",m.id)
+   .order("created_at",{ascending:true})
+   .limit(200);
+ if(error){
+   console.error(error);
+   if(box)box.innerHTML=`<div class="comment-empty">댓글을 불러오지 못했습니다.</div>`;
+   return;
+ }
+ currentComments=data||[];
+ renderComments();
+ subscribeComments(m.id);
+}
+function subscribeComments(matchId){
+ if(!window.__KSYFA_SUPABASE__)return;
+ if(commentChannel){
+   window.__KSYFA_SUPABASE__.removeChannel(commentChannel);
+   commentChannel=null;
+ }
+ commentChannel=window.__KSYFA_SUPABASE__
+   .channel("comments-"+matchId+"-"+Math.random().toString(36).slice(2))
+   .on("postgres_changes",{event:"*",schema:"public",table:"match_comments",filter:`match_id=eq.${matchId}`},()=>loadCommentsForSelected())
+   .subscribe();
+}
+async function sendComment(){
+ if(!window.__KSYFA_REMOTE_READY__)return toast("실시간 서버 연결을 확인하세요.");
+ const now=Date.now();
+ if(now-lastCommentAt<5000)return toast("댓글은 5초에 한 번 작성할 수 있습니다.");
+ const m=getMatch(state.selected);
+ const team=document.getElementById("commentTeam").value;
+ const content=document.getElementById("commentInput").value.trim();
+ if(!content)return toast("댓글 내용을 입력하세요.");
+ if(content.length>120)return toast("댓글은 120자까지 작성할 수 있습니다.");
+ if(![m.a,m.b].includes(team))return toast("응원팀을 다시 선택하세요.");
+ const {error}=await window.__KSYFA_SUPABASE__.from("match_comments").insert({match_id:m.id,team_id:team,content});
+ if(error){console.error(error);return toast("댓글 등록에 실패했습니다.");}
+ lastCommentAt=now;
+ document.getElementById("commentInput").value="";
+ toast("댓글 등록 완료");
+}
+async function deleteComment(id){
+ if(!adminAuthed)return;
+ if(!confirm("이 댓글을 삭제할까요?"))return;
+ const pin=sessionStorage.getItem("ksyfa_admin_pin")||"";
+ try{
+   const res=await fetch("/api/admin",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:"delete_comment",pin,id})});
+   if(!res.ok)throw new Error(await res.text());
+   toast("댓글을 삭제했습니다.");
+ }catch(e){console.error(e);toast("댓글 삭제에 실패했습니다.");}
+}
+
 function renderHero(){
  const m=getMatch(state.selected), d=state.matches[m.id], A=tn(m.a),B=tn(m.b);
  document.getElementById("heroMeta").textContent=`${m.label} · ${m.time} · 전후반 각 ${m.mins}분`;
  ["A","B"].forEach(side=>{const T=side==="A"?A:B;document.getElementById("heroLogo"+side).src=T.logo;document.getElementById("heroName"+side).textContent=T.name});
  document.getElementById("heroScoreA").textContent=d.scoreA;document.getElementById("heroScoreB").textContent=d.scoreB;const liveClock=getLiveClock(m,d);document.getElementById("heroClock").innerHTML=`<div class="live-clock-main">${liveClock.main}</div>${liveClock.detail?`<div class="clock-detail">${liveClock.detail}</div>`:""}`;
  const pill=document.getElementById("heroStatusPill"); const isLive=(d.status==="전반"||d.status==="후반"||d.status==="하프타임"); pill.innerHTML=isLive?`<span class="live-dot"></span>LIVE · ${d.status}`:d.status; pill.className="pill "+(isLive?"live":"");
- renderTeamGoals(m,d);renderShootoutHero(m,d);
+ renderTeamGoals(m,d);renderShootoutHero(m,d);updateCommentTeamOptions();
  const total=d.cheerA+d.cheerB,pa=total?Math.round(d.cheerA/total*100):50,pb=100-pa;
  document.getElementById("cheerATxt").textContent=`${d.cheerA}표 · ${pa}%`;document.getElementById("cheerBTxt").textContent=`${d.cheerB}표 · ${pb}%`;
  document.getElementById("cheerBarA").style.width=pa+"%";document.getElementById("cheerBarB").style.width=pb+"%";
@@ -819,7 +954,13 @@ function syncLineupSelectors(){
  const m=getMatch(document.getElementById("lineupMatchSelect").value),cur=document.getElementById("lineupTeamSelect").value;
  document.getElementById("lineupTeamSelect").innerHTML=[m.a,m.b].filter(Boolean).map(k=>`<option value="${k}">${tn(k).name}</option>`).join("");if([m.a,m.b].includes(cur))document.getElementById("lineupTeamSelect").value=cur;renderLineup()
 }
-function renderAll(){renderGroups();renderTeams();renderHero();renderSchedule();renderRank();renderScorers();renderAdmin();document.getElementById("lineupMatchSelect").value=state.selected;syncLineupSelectors()}
+function renderAll(){renderGroups();renderTeams();renderHero();renderSchedule();renderRank();renderScorers();renderAdmin();document.getElementById("lineupMatchSelect").value=state.selected;syncLineupSelectors()
+ const cm=getMatch(state.selected);
+ if(cm && window.__lastCommentMatch!==cm.id){
+   window.__lastCommentMatch=cm.id;
+   setTimeout(loadCommentsForSelected,0);
+ }
+}
 function showPage(id){if(id==="admin"&&!adminAuthed){openAdminLogin();return}document.querySelectorAll(".page").forEach(p=>p.classList.remove("active"));document.querySelectorAll(".nav").forEach(b=>b.classList.remove("active"));document.getElementById(id).classList.add("active");document.querySelector(`.nav[data-page="${id}"]`)?.classList.add("active");window.scrollTo({top:0,behavior:"smooth"})}
 document.querySelectorAll(".nav").forEach(b=>b.onclick=()=>showPage(b.dataset.page));
 
@@ -857,6 +998,28 @@ document.getElementById("adminLogout").onclick=()=>{
  updateAdminUI();showPage("home");toast("관리자 로그아웃 완료")
 };
 
+
+function adminFormIsBeingEdited(){
+ const adminPage=document.getElementById("admin");
+ const el=document.activeElement;
+ return !!(
+   adminPage?.classList.contains("active") &&
+   el &&
+   ["INPUT","TEXTAREA","SELECT"].includes(el.tagName)
+ );
+}
+
+function renderWithoutAdminForm(){
+ // Realtime updates should refresh public-facing information,
+ // but must not recreate ADMIN inputs while the operator is typing.
+ renderHero();
+ renderSchedule();
+ renderRanking();
+ renderScorers();
+ renderTeams();
+ renderLineup();
+}
+
 async function initRemoteSync(){
  const badge=document.getElementById("syncStatus");
 
@@ -886,7 +1049,8 @@ async function initRemoteSync(){
      state=data.state;
      if(localSelected && getMatch(localSelected))state.selected=localSelected;
      cacheState();
-     renderAll();
+     if(adminFormIsBeingEdited())renderWithoutAdminForm();
+     else renderAll();
    }
 
    badge.textContent="LIVE";
@@ -903,7 +1067,12 @@ async function initRemoteSync(){
              state=payload.new.state;
              if(localSelected && getMatch(localSelected))state.selected=localSelected;
              cacheState();
-             renderAll();
+
+             if(adminFormIsBeingEdited()){
+               renderWithoutAdminForm();
+             }else{
+               renderAll();
+             }
            }
          }
        )
@@ -920,6 +1089,9 @@ async function initRemoteSync(){
    badge.style.color="#ff8e9f";
  }
 }
+
+document.getElementById("sendComment").onclick=sendComment;
+document.getElementById("commentInput").addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();sendComment();}});
 
 selectOpts();renderAll();updateAdminUI();
 initRemoteSync();
