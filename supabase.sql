@@ -1,0 +1,67 @@
+-- KSYFA Match Center v11
+-- Supabase SQL Editor에서 전체 실행하세요.
+
+create table if not exists public.tournament_state (
+  id text primary key,
+  state jsonb not null,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.tournament_state enable row level security;
+
+drop policy if exists "public can read tournament state" on public.tournament_state;
+create policy "public can read tournament state"
+on public.tournament_state
+for select
+to anon, authenticated
+using (true);
+
+-- 브라우저에서는 직접 UPDATE할 수 없게 둡니다.
+-- 관리자 쓰기는 Netlify Function이 service_role로 수행합니다.
+
+insert into public.tournament_state (id, state)
+values ('main', '{}'::jsonb)
+on conflict (id) do nothing;
+
+-- 관중 응원 버튼용 원자적 증가 함수.
+-- tournament_state.state.matches[match_id].cheerA / cheerB 를 한 번에 1씩 올립니다.
+create or replace function public.increment_cheer(p_match_id text, p_side text)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  key_name text;
+begin
+  if p_match_id !~ '^M([1-9]|1[0-4])$' then
+    raise exception 'invalid match id';
+  end if;
+
+  if p_side = 'A' then
+    key_name := 'cheerA';
+  elsif p_side = 'B' then
+    key_name := 'cheerB';
+  else
+    raise exception 'invalid side';
+  end if;
+
+  update public.tournament_state
+  set state = jsonb_set(
+      state,
+      array['matches', p_match_id, key_name],
+      to_jsonb(
+        coalesce((state #>> array['matches', p_match_id, key_name])::bigint, 0) + 1
+      ),
+      true
+    ),
+    updated_at = now()
+  where id = 'main';
+end;
+$$;
+
+revoke all on function public.increment_cheer(text,text) from public;
+grant execute on function public.increment_cheer(text,text) to anon, authenticated;
+
+-- Realtime publication에 테이블 추가.
+alter publication supabase_realtime add table public.tournament_state;
