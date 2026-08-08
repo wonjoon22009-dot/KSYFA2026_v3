@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>KSYFA Match Center — Tournament Live v12</title>
+<title>KSYFA Match Center — Tournament Live v12.2</title>
 <style>
 :root{
  --bg:#071019;--bg2:#0b1522;--card:#101c2a;--card2:#142334;--line:#24384c;
@@ -406,10 +406,11 @@ textarea{resize:vertical;min-height:90px}
  </div>
 </div>
 
-<div class="footer">KSYFA · Korean Science Yeongjae Football Association · Tournament Live v12</div><div class="toast" id="toast"></div>
+<div class="footer">KSYFA · Korean Science Yeongjae Football Association · Tournament Live v12.2</div><div class="toast" id="toast"></div>
 
 
 <script src="config.js"></script>
+<script>window.__KSYFA_REMOTE_READY__="loading";</script>
 <script type="module">
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
 
@@ -422,6 +423,7 @@ if (!cfg.supabaseUrl || !cfg.supabaseAnonKey || cfg.supabaseUrl.includes("YOUR_"
   window.__KSYFA_SUPABASE__ = sb;
   window.__KSYFA_REMOTE_READY__ = true;
 }
+window.dispatchEvent(new Event("ksyfa-supabase-ready"));
 </script>
 
 <script>
@@ -857,40 +859,57 @@ document.getElementById("adminLogout").onclick=()=>{
 
 async function initRemoteSync(){
  const badge=document.getElementById("syncStatus");
+
+ // ES module scripts run after classic scripts, so wait until Supabase bootstrap finishes.
+ if(window.__KSYFA_REMOTE_READY__==="loading" || typeof window.__KSYFA_REMOTE_READY__==="undefined"){
+   badge.textContent="CONNECTING";
+   badge.style.color="#ffd36f";
+   return;
+ }
+
  if(!window.__KSYFA_REMOTE_READY__){
    badge.textContent="LOCAL";
    return;
  }
+
  try{
    const {data,error}=await window.__KSYFA_SUPABASE__
      .from("tournament_state")
      .select("state")
      .eq("id","main")
      .single();
+
    if(error)throw error;
+
    if(data?.state?.matches){
      state=data.state;
      cacheState();
      renderAll();
    }
+
    badge.textContent="LIVE";
    badge.style.color="#6fffc5";
 
-   window.__KSYFA_SUPABASE__
-     .channel("ksyfa-state")
-     .on("postgres_changes",{event:"UPDATE",schema:"public",table:"tournament_state",filter:"id=eq.main"},payload=>{
-       if(payload.new?.state){
-         state=payload.new.state;
-         cacheState();
-         renderAll();
-       }
-     })
-     .subscribe(status=>{
-       if(status==="SUBSCRIBED"){
-         badge.textContent="LIVE";
-         badge.style.color="#6fffc5";
-       }
-     });
+   if(!window.__KSYFA_CHANNEL__){
+     window.__KSYFA_CHANNEL__=window.__KSYFA_SUPABASE__
+       .channel("ksyfa-state")
+       .on("postgres_changes",
+         {event:"UPDATE",schema:"public",table:"tournament_state",filter:"id=eq.main"},
+         payload=>{
+           if(payload.new?.state?.matches){
+             state=payload.new.state;
+             cacheState();
+             renderAll();
+           }
+         }
+       )
+       .subscribe(status=>{
+         if(status==="SUBSCRIBED"){
+           badge.textContent="LIVE";
+           badge.style.color="#6fffc5";
+         }
+       });
+   }
  }catch(err){
    console.error(err);
    badge.textContent="OFFLINE";
@@ -898,7 +917,9 @@ async function initRemoteSync(){
  }
 }
 
-selectOpts();renderAll();updateAdminUI();initRemoteSync();setInterval(refreshLiveClockOnly,60000);
+selectOpts();renderAll();updateAdminUI();
+initRemoteSync();
+window.addEventListener("ksyfa-supabase-ready",()=>initRemoteSync(),{once:true});setInterval(refreshLiveClockOnly,60000);
 
 document.getElementById("adminMatch").onchange=e=>{state.selected=e.target.value;save();renderAll()};
 document.getElementById("saveMatch").onclick=()=>{
