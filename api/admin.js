@@ -21,6 +21,30 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: true });
   }
 
+  if (body.action === "delete_comment") {
+    const id = String(body.id || "");
+    if (!/^\d+$/.test(id)) {
+      return res.status(400).send("Invalid comment id");
+    }
+
+    const response = await fetch(
+      `${SUPABASE_URL}/rest/v1/match_comments?id=eq.${id}`,
+      {
+        method: "DELETE",
+        headers: {
+          apikey: SERVICE_KEY,
+          Authorization: `Bearer ${SERVICE_KEY}`,
+          Prefer: "return=minimal"
+        }
+      }
+    );
+
+    if (!response.ok) {
+      return res.status(500).send(await response.text());
+    }
+    return res.status(200).json({ ok: true });
+  }
+
   if (body.action === "save_state") {
     if (!body.state || typeof body.state !== "object") {
       return res.status(400).send("Missing state");
