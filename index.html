@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>KSYFA Match Center — Tournament Live v12.2</title>
+<title>KSYFA Match Center — Tournament Live v12.3</title>
 <style>
 :root{
  --bg:#071019;--bg2:#0b1522;--card:#101c2a;--card2:#142334;--line:#24384c;
@@ -406,7 +406,7 @@ textarea{resize:vertical;min-height:90px}
  </div>
 </div>
 
-<div class="footer">KSYFA · Korean Science Yeongjae Football Association · Tournament Live v12.2</div><div class="toast" id="toast"></div>
+<div class="footer">KSYFA · Korean Science Yeongjae Football Association · Tournament Live v12.3</div><div class="toast" id="toast"></div>
 
 
 <script src="config.js"></script>
@@ -882,7 +882,9 @@ async function initRemoteSync(){
    if(error)throw error;
 
    if(data?.state?.matches){
+     const localSelected=state.selected;
      state=data.state;
+     if(localSelected && getMatch(localSelected))state.selected=localSelected;
      cacheState();
      renderAll();
    }
@@ -897,7 +899,9 @@ async function initRemoteSync(){
          {event:"UPDATE",schema:"public",table:"tournament_state",filter:"id=eq.main"},
          payload=>{
            if(payload.new?.state?.matches){
+             const localSelected=state.selected;
              state=payload.new.state;
+             if(localSelected && getMatch(localSelected))state.selected=localSelected;
              cacheState();
              renderAll();
            }
